@@ -1,0 +1,9 @@
+python>=3.10
+numpy
+pandas
+scipy
+statsmodels
+patsy
+pyreadstat
+matplotlib
+openpyxl

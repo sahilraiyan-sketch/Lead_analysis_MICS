@@ -1,0 +1,145 @@
+"""Defines the candidate indicators and screens them on exposure variables only."""
+import os, sys
+sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
+from config import *
+import pyreadstat, pandas as pd, numpy as np, json
+hh,_=pyreadstat.read_sav(os.path.join(MICS_DIR,'hh.sav'),apply_value_formats=False)
+ch,_=pyreadstat.read_sav(os.path.join(MICS_DIR,'ch.sav'),apply_value_formats=False)
+wm,_=pyreadstat.read_sav(os.path.join(MICS_DIR,'wm.sav'),apply_value_formats=False,usecols=['HH1','HH2','W_Lead','W_labresult','wmblweight'])
+ch=ch[(ch.C_labresult==1)&(ch.C_Lead>0)&(ch.C_Lead<900)].copy()
+d=ch.merge(hh.drop(columns=[c for c in hh.columns if c in ch.columns and c not in ('HH1','HH2')]+[]),on=['HH1','HH2'],how='left',suffixes=('','_h'))
+print(len(d), d.PSU.nunique())
+def yn(s,yes=(1,)):
+    return pd.Series(np.where(s.isna()|s.isin([8,9,98,99]),np.nan,s.isin(yes).astype(float)),index=s.index)
+def inset(s,yes,bad=(99,98,96,9)):
+    return pd.Series(np.where(s.isna()|s.isin(bad),np.nan,s.isin(yes).astype(float)),index=s.index)
+def any_yes(cols):
+    X=d[cols]; a=(X==1).any(axis=1); allobs=X.notna().all(axis=1)&(X.isin([1,2])).all(axis=1)
+    return pd.Series(np.where(a,1.0,np.where(allobs,0.0,np.nan)),index=d.index)
+def lt(s,yes=(2,3,4)): return pd.Series(np.where(s.isna()|(s==9),np.nan,s.isin(yes).astype(float)),index=d.index)
+L=[]
+def add(i,dom,lab,var,cod,lvl,role,s,tier): L.append((i,dom,lab,var,cod,lvl,role,s,tier))
+
+add('W01','Water','Piped water main source','WS1','WS1 in 11-14','Household','Anchor',inset(d.WS1,[11,12,13,14]),1)
+add('W02','Water','Own piped connection (dwelling/yard)','WS1','WS1 in 11-12','Household','Shared-infrastructure',inset(d.WS1,[11,12]),2)
+add('W03','Water','Neighbour connection or public tap','WS1','WS1 in 13-14','Household','Shared-infrastructure',inset(d.WS1,[13,14]),2)
+add('W04','Water','Tubewell (deep or shallow)','WS1','WS1 in 21-22','Household','Shared-infrastructure',inset(d.WS1,[21,22]),2)
+add('W05','Water','Deep tubewell','WS1','WS1 = 21','Household','Shared-infrastructure',inset(d.WS1,[21]),2)
+add('W06','Water','Shallow tubewell','WS1','WS1 = 22','Household','Shared-infrastructure',inset(d.WS1,[22]),2)
+add('W07','Water','Packaged, bottled or refill water','WS1','WS1 in 91-93','Household','Behavior/consumer',inset(d.WS1,[91,92,93]),2)
+add('W08','Water','Tanker, cart or kiosk water','WS1','WS1 in 61,71,72','Household','Shared-infrastructure',inset(d.WS1,[61,71,72]),2)
+add('W09','Water','Wet-season source differs from main source','WS10CC, WS1','WS10CC != WS1','Household','Shared-infrastructure',pd.Series(np.where(d.WS10CC.isna()|d.WS1.isna(),np.nan,(d.WS10CC!=d.WS1).astype(float)),index=d.index),2)
+add('W10','Water','Water source on premises','WS3','WS3 in 1-2','Household','Shared-infrastructure',inset(d.WS3,[1,2]),2)
+add('W11','Water','Treats drinking water','WS9','WS9 = 1','Household','Behavior/consumer',yn(d.WS9),2)
+add('W12','Water','Boils drinking water','WS10A','WS10A = A','Household','Behavior/consumer',pd.Series(np.where(d.WS9==1,(d.WS10A=='A').astype(float),np.where(d.WS9==2,0.0,np.nan)),index=d.index),2)
+add('W13','Water','Uses water filter or has filter/dispenser','WS10D, HC7G','WS10D = D or HC7G = 1','Household','Behavior/consumer',pd.Series(np.where(d.HC7G.isna(),np.nan,((d.WS10D=='D')|(d.HC7G==1)).astype(float)),index=d.index),2)
+add('W14','Water','Insufficient water in last month','WS7','WS7 = 1','Household','Shared-infrastructure',yn(d.WS7),2)
+add('W15','Water','Flood experienced (natural hazard)','WS10FA','WS10FA = 1','Household','Environmental context',yn(d.WS10FA),2)
+add('W16','Water','Source-water arsenic > 10 ug/L (test subset)','WQ19D','WQ19D > 10 (valid < 990)','Household subset','Measured water hazard',pd.Series(np.where(d.WQ19D.isna()|(d.WQ19D>=990),np.nan,(d.WQ19D>10).astype(float)),index=d.index),2)
+add('W17','Water','E. coli detected in household water (test subset)','WQ26','WQ26 > 0 (valid < 990)','Household subset','Measured water hazard',pd.Series(np.where(d.WQ26.isna()|(d.WQ26>=990),np.nan,(d.WQ26>0).astype(float)),index=d.index),2)
+add('W18','Water','Source-water salinity (log conductivity, test subset)','WQ19B','log(WQ19B)','Household subset','Measured water hazard',np.log(d.WQ19B.where((d.WQ19B>0)&(d.WQ19B<99000))),3)
+
+imp=[11,12,13,21,22,24,31,32]
+add('S01','Sanitation','Improved sanitation facility','WS11','WS11 in 11-13,21,22,24,31,32','Household','Shared-infrastructure',inset(d.WS11,imp),1)
+add('S02','Sanitation','Flush to sewer or septic','WS11','WS11 in 11-12','Household','Shared-infrastructure',inset(d.WS11,[11,12]),2)
+add('S03','Sanitation','Hanging, bucket or no facility','WS11','WS11 in 41,51,95','Household','Shared-infrastructure',inset(d.WS11,[41,51,95]),2)
+add('S04','Sanitation','Shared toilet','WS15','WS15 = 1','Household','Shared-infrastructure',yn(d.WS15),2)
+add('S05','Hygiene','Fixed handwashing facility observed','HW1','HW1 in 1-2','Household','Behavior/consumer',pd.Series(np.where(d.HW1.isna()|d.HW1.isin([5,6]),np.nan,d.HW1.isin([1,2]).astype(float)),index=d.index),2)
+add('S06','Hygiene','Soap or detergent observed at handwashing place','HW3A, HW3B','HW3A = A or HW3B = B','Household','Behavior/consumer',pd.Series(np.where(d.HW1.isna(),np.nan,((d.HW3A=='A')|(d.HW3B=='B')).astype(float)),index=d.index),2)
+
+fin=lambda s,lo,hi: pd.Series(np.where(s.isna()|(s==96),np.nan,((s>=lo)&(s<=hi)).astype(float)),index=d.index)
+d['_f']=fin(d.HC4,31,35); d['_r']=fin(d.HC5,31,36); d['_w']=fin(d.HC6,31,36)
+add('H01','Housing','Finished floor','HC4','HC4 in 31-35','Household','Housing/SES',d._f,2)
+add('H02','Housing','Finished roof','HC5','HC5 in 31-36','Household','Housing/SES',d._r,2)
+add('H03','Housing','Finished exterior wall','HC6','HC6 in 31-36','Household','Housing/SES',d._w,2)
+add('H04','Housing','Finished floor, roof and wall (all three)','HC4-HC6','all three finished','Household','Housing/SES',pd.Series(np.where(d[['_f','_r','_w']].isna().any(axis=1),np.nan,d[['_f','_r','_w']].min(axis=1)),index=d.index),1)
+add('H05','Housing','Paint in poor condition (peeling/chipping)','HC6A','HC6A = 2','Household','Lead-source candidate',pd.Series(np.where(d.HC6A.isna(),np.nan,(d.HC6A==2).astype(float)),index=d.index),2)
+add('H06','Housing','Crowding (>=3 persons per sleeping room)','HH48, HC3','HH48/HC3 >= 3','Household','Housing/SES',pd.Series(np.where(d.HC3.isna()|(d.HC3<=0),np.nan,((d.HH48/d.HC3)>=3).astype(float)),index=d.index),2)
+add('H07','Housing','Owns dwelling','HC14','HC14 = 1','Household','Housing/SES',pd.Series(np.where(d.HC14.isna()|d.HC14.isin([6,9]),np.nan,(d.HC14==1).astype(float)),index=d.index),3)
+
+add('E01','Energy','Clean cooking (electric, gas, LPG, biogas)','EU1','EU1 in 2-5','Household','Household-specific',inset(d.EU1,[2,3,4,5],bad=(97,99,96)),1)
+add('E02','Energy','Solid-fuel cooking','EU1, EU4','EU1 in 6,7,9,10','Household','Household-specific',inset(d.EU1,[6,7,9,10],bad=(97,99,96)),2)
+add('E03','Energy','Electricity in household','HC8','HC8 = 1','Household','Housing/SES',yn(d.HC8),3)
+add('E04','Energy','Rechargeable or dry-cell battery as main electricity','HC8B','HC8B in 51-52','Household','Lead-source candidate',pd.Series(np.where(d.HC8B.isna()|d.HC8B.isin([98,99]),np.nan,d.HC8B.isin([51,52]).astype(float)),index=d.index),3)
+add('E05','Energy','Generator used as electricity source','HC8AE','HC8AE = E','Household','Lead-source candidate',pd.Series(np.where(d.HC8.isna(),np.nan,(d.HC8AE=='E').astype(float)),index=d.index),3)
+
+add('A01','Wealth','Wealth quintile 5 (richest)','windex5','windex5 = 5','Household','Housing/SES',pd.Series(np.where(d.windex5.isin([1,2,3,4,5]),(d.windex5==5).astype(float),np.nan),index=d.index),1)
+add('A02','Wealth','Wealth quintiles 4-5','windex5','windex5 in 4-5','Household','Housing/SES',pd.Series(np.where(d.windex5.isin([1,2,3,4,5]),(d.windex5>=4).astype(float),np.nan),index=d.index),2)
+add('A03','Wealth','Wealth score (z, continuous)','wscore','wscore','Household','Housing/SES',d.wscore.where(d.windex5.isin([1,2,3,4,5])),1)
+for i,v,lab in [('A04','HC9B','Refrigerator'),('A05','HC9A','Television'),('A06','HC12A','Smartphone'),('A07','HC13','Internet at home'),('A08','HC19','Bank account'),('A09','HC15','Agricultural land'),('A10','HC17','Livestock'),('A11','HC11','Computer')]:
+    add(i,'Assets',lab,v,v+' = 1','Household','Housing/SES',yn(d[v]),3)
+add('A12','Assets','Motorcycle or car','HC10C, HC10E','HC10C = 1 or HC10E = 1','Household','Housing/SES',pd.Series(np.where(d[['HC10C','HC10E']].isin([1]).any(axis=1),1.0,np.where(d[['HC10C','HC10E']].isin([2]).all(axis=1),0.0,np.nan)),index=d.index),3)
+add('A13','Assets','Received social assistance (any programme)','ST3$1-7','any ST3 = 1','Household','Housing/SES',any_yes([f'ST3${k}' for k in range(1,8)]) if all(f'ST3${k}' in d for k in range(1,8)) else pd.Series(np.nan,index=d.index),3)
+
+add('D01','Education','Household head secondary or higher','helevel','helevel in 3-5','Household','Housing/SES',pd.Series(np.where(d.helevel.isna()|(d.helevel==9),np.nan,(d.helevel>=3).astype(float)),index=d.index),2)
+add('D02','Education','Mother secondary or higher','melevel','melevel in 3-5','Household','Individual/SES',pd.Series(np.where(d.melevel.isna()|(d.melevel==9),np.nan,(d.melevel>=3).astype(float)),index=d.index),1)
+add('D03','Demography','Female-headed household','HHSEX','HHSEX = 2','Household','Demographic',pd.Series(np.where(d.HHSEX.isna(),np.nan,(d.HHSEX==2).astype(float)),index=d.index),3)
+add('D04','Demography','Household size >= 6','HH48','HH48 >= 6','Household','Demographic',(d.HH48>=6).astype(float),3)
+add('D05','Demography','Two or more children under 5','HH51','HH51 >= 2','Household','Demographic',pd.Series(np.where(d.HH51.isna(),np.nan,(d.HH51>=2).astype(float)),index=d.index),3)
+add('D06','Demography','Child is female','HL4','HL4 = 2','Child','Demographic',pd.Series(np.where(d.HL4.isna(),np.nan,(d.HL4==2).astype(float)),index=d.index),3)
+add('D07','Demography','Birth registered','BR2','BR2 = 1','Child','Individual/SES',yn(d.BR2),3)
+add('D08','Demography','Covered by health insurance','UIN1','UIN1 = 1','Child','Individual/SES',yn(d.UIN1),3)
+
+add('C01','Child behavior','Pica (non-food ingestion) at least once in 3 months','LT20','LT20 in 2-4','Child','Positive control (household)',lt(d.LT20),1)
+add('C02','Child behavior','Wears amulet (any frequency)','LT13','LT13 in 2-4','Child','Behavior/consumer',lt(d.LT13),2)
+add('C03','Child behavior','Child uses surma (any frequency)','LT16','LT16 in 2-4','Child','Behavior/consumer',lt(d.LT16),2)
+add('C04','Child behavior','Regular contact with sindoor','LT14','LT14 in 2-4','Child','Behavior/consumer',lt(d.LT14),2)
+add('C05','Child behavior','Smoking (cigarettes/bidi) in household','LT12','LT12 in 2-4','Household','Household-specific',lt(d.LT12),2)
+add('C06','Child behavior','Outdoor time >= 4 h yesterday','LT19B','LT19B >= 4','Child','Behavior/consumer',pd.Series(np.where(d.LT19B.isna(),np.nan,(d.LT19B>=4).astype(float)),index=d.index),3)
+add('C07','Child behavior','Shop-bought toys','EC2B','EC2B = 1','Child','Lead-source candidate',yn(d.EC2B),2)
+add('C08','Child behavior','Homemade toys','EC2A','EC2A = 1','Child','Behavior/consumer',yn(d.EC2A),3)
+add('C09','Child diet','Breastfed yesterday','BD3','BD3 = 1','Child','Behavior/consumer',yn(d.BD3),3)
+add('C10','Child diet','Dairy or milk (BD7C or BD8A or BD8O)','BD7C, BD8A, BD8O','any = 1','Child','Behavior/consumer',any_yes(['BD7C','BD8A','BD8O']),3)
+add('C11','Child diet','Dark green leafy vegetables','BD8E','BD8E = 1','Child','Behavior/consumer',yn(d.BD8E),3)
+add('C12','Child diet','Eggs, meat or fish (BD8K, BD8L, BD8M)','BD8K, BD8L, BD8M','any = 1','Child','Behavior/consumer',any_yes(['BD8K','BD8L','BD8M']),3)
+add('C13','Child diet','Sentinel sweet or fried foods (BD8P or BD8Q)','BD8P, BD8Q','any = 1','Child','Lead-source candidate',any_yes(['BD8P','BD8Q']),3)
+add('C14','Child diet','Tea, coffee or herbal drinks','BD7H','BD7H = 1','Child','Behavior/consumer',yn(d.BD7H),3)
+
+add('N01','Proximity','Any lead-related activity near residence (LT17A-F)','LT17A-F','any = yes','Neighborhood-by-design','Calibration: expected neighborhood',any_yes([f'LT17{k}' for k in 'ABCDEF']),1)
+add('N02','Proximity','Battery making/recycling/repair near residence (LT17A-C)','LT17A-C','any = yes','Neighborhood-by-design','Calibration: expected neighborhood',any_yes([f'LT17{k}' for k in 'ABC']),2)
+add('N03','Occupation','Lead-related occupation, regular contact (LT18A-F)','LT18A-F','any = yes','Household','Calibration: expected household',any_yes([f'LT18{k}' for k in 'ABCDEF']),1)
+add('N04','Occupation','Battery-related occupation (LT18A-C)','LT18A-C','any = yes','Household','Calibration: expected household',any_yes([f'LT18{k}' for k in 'ABC']),2)
+add('N05','Occupation','Jewellery, e-waste or auto-repair occupation (LT18D-F)','LT18D-F','any = yes','Household','Calibration: expected household',any_yes([f'LT18{k}' for k in 'DEF']),2)
+
+add('K01','Knowledge','Has heard of lead','LT21','LT21 = 1','Household','Information environment',yn(d.LT21),2)
+add('K02','Knowledge','Knows lead can be in turmeric','LT22O','LT22O = O','Household','Information environment',pd.Series(np.where(d.LT21==1,(d.LT22O=='O').astype(float),np.where(d.LT21==2,0.0,np.nan)),index=d.index),3)
+
+add('M01','Measured','Soil lead (log mg/kg)','S_Lead','log(S_Lead)','Household','Measured exposure',np.log(d.S_Lead.where((d.S_Lead>0)&(d.S_Lead<9000))),1)
+add('M02','Measured','Soil arsenic (log mg/kg)','S_As','log(S_As)','Household','Measured exposure',np.log(d.S_As.where((d.S_As>0)&(d.S_As<9000))) if 'S_As' in d else pd.Series(np.nan,index=d.index),3)
+
+add('G01','Geography','Urban residence','HH6','HH6 = 1','Household','Geography',pd.Series(np.where(d['HH6'].isna(),np.nan,(d['HH6']==1).astype(float)),index=d.index) if 'HH6' in d else pd.Series(np.nan,index=d.index),3)
+w=d.chblweight.values
+rows=[]
+for (i,dom,lab,var,cod,lvl,role,s,tier) in L:
+    s=pd.Series(s,index=d.index).astype(float)
+    ok=s.notna()
+    n=int(ok.sum())
+    if n<500: rows.append(dict(id=i,domain=dom,label=lab,vars=var,coding=cod,level=lvl,role=role,tier=tier,n=n,prev=None,icc=None,inf_psu=None,inf_child=None,binary=None)); continue
+    x=s[ok]; ww=pd.Series(w,index=d.index)[ok]; g=d.PSU[ok]
+    binary=set(np.unique(x.dropna()))<= {0.0,1.0}
+    prev=float(np.average(x,weights=ww)) if binary else float(np.average(x,weights=ww))
+    df=pd.DataFrame({'x':x,'g':g})
+    gs=df.groupby('g').x.agg(['count','mean','sum'])
+    N=len(df);k=len(gs)
+    ssb=(gs['count']*(gs['mean']-df.x.mean())**2).sum()
+    ssw=((df.x-df.groupby('g').x.transform('mean'))**2).sum()
+    msb=ssb/(k-1); msw=ssw/(N-k)
+    n0=(N-(gs['count']**2).sum()/N)/(k-1)
+    icc=(msb-msw)/(msb+(n0-1)*msw)
+    if binary:
+        gg=df.groupby('g').x.agg(['count','min','max'])
+        inf=gg[(gg['count']>=2)&(gg['min']!=gg['max'])]
+        inf_psu=int(len(inf)); inf_child=int(inf['count'].sum())
+    else:
+        inf_psu=int((gs['count']>=2).sum()); inf_child=int(gs.loc[gs['count']>=2,'count'].sum())
+    rows.append(dict(id=i,domain=dom,label=lab,vars=var,coding=cod,level=lvl,role=role,tier=tier,n=n,prev=prev,icc=float(icc),inf_psu=inf_psu,inf_child=inf_child,binary=bool(binary)))
+out=pd.DataFrame(rows)
+pd.set_option('display.width',250,'display.max_rows',200,'display.max_colwidth',50)
+print(out[['id','label','n','prev','icc','inf_psu','inf_child','tier']].round(3).to_string())
+out.to_json(os.path.join(OUT_DIR,'screen.json'),orient='records')
+
+m=d.merge(wm[(wm.W_labresult==1)&(wm.W_Lead>0)&(wm.W_Lead<900)][['HH1','HH2','W_Lead']],on=['HH1','HH2'],how='inner')
+print('children with mother valid blood lead in same HH:',len(m))
+print('women valid lead total:',((wm.W_labresult==1)&(wm.W_Lead>0)&(wm.W_Lead<900)).sum())
+print('child valid As, Cd, Hg, Hb among 10622:', [(c, int(((d[c]>0)&(d[c]<9000)).sum())) for c in ['C_As','C_Cd','C_Hg','C_Hb']])
+print('children with household arsenic valid', int(((d.WQ19D<990)).sum()))
